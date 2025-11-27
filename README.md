@@ -62,3 +62,7 @@ easyPay is a Go-based payment processing service that integrates AI-powered mess
   - `database/`: Database connection and helpers.
   - `queue/`: RabbitMQ setup.
 - `pkg/`: Public library code (types, utils).
+
+## Note
+
+This project is still in development. Production release planned for the near future.
