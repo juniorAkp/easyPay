@@ -93,6 +93,9 @@ func (r *Consumer) consumePaymentRequests() {
 
 		return nil
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func (r *Consumer) consumeNotifications() {
