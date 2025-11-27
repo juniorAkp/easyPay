@@ -1,15 +1,21 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/juniorAkp/easyPay/internal/config"
+	"github.com/juniorAkp/easyPay/internal/model"
 	"github.com/juniorAkp/easyPay/internal/queue"
 	"github.com/juniorAkp/easyPay/internal/repository"
+	"github.com/juniorAkp/easyPay/internal/services/ai"
 	"github.com/juniorAkp/easyPay/internal/services/momo"
+	"github.com/juniorAkp/easyPay/internal/services/whatsapp"
 	"github.com/juniorAkp/easyPay/pkg/types"
 )
 
@@ -81,73 +87,80 @@ func (h *Handler) HandleWebhook(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "received"})
 }
 
-//func (h *Handler) processMessage(userMessage, userPhone, userName string) {
-//	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-//	defer cancel()
-//
-//	fmt.Printf("Processing message from %s: %s\n", userPhone, userMessage)
-//
-//	user, err := h.repo.GetUserByPhone(ctx, userPhone)
-//	if err != nil {
-//		fmt.Printf("Error fetching user: %v\n", err)
-//	}
-//
-//	if user == nil {
-//		newUser := &model.Details{
-//			Username:  userName,
-//			Phone:     userPhone,
-//			CreatedAt: time.Now(),
-//			UpdatedAt: time.Now(),
-//		}
-//
-//		if err := h.repo.CreateUser(ctx, newUser); err != nil {
-//			fmt.Printf("Failed to create user: %v\n", err)
-//			return
-//		}
-//
-//		fmt.Printf("New user created: %s\n", userPhone)
-//		whatsapp.SendTemplateMessage(userPhone, string(whatsapp.EasyPayIntro))
-//		return
-//	}
-//
-//	result, err := ai.ExtractMessageDetails(ctx, userMessage)
-//	if err != nil {
-//		fmt.Printf("AI extraction error: %v\n", err)
-//		whatsapp.SendMessage(userPhone, "Sorry, I didn’t understand that. Please send the amount and account again.")
-//		return
-//	}
-//
-//	if result.Amount <= 0 {
-//		whatsapp.SendMessage(userPhone, "Sorry, I didn’t understand that. Please send the amount and account again.")
-//		return
-//	}
-//
-//	whatsapp.SendMessage(userPhone, fmt.Sprintf("⌛Processing your payment of %.2f GHS...", result.Amount))
-//
-//	refId, err := h.momoService.RequestPay(
-//		strconv.FormatFloat(result.Amount, 'f', -1, 64),
-//		userPhone,
-//		result.Message,
-//	)
-//	if err != nil {
-//		fmt.Printf("MTN MoMo error: %v\n", err)
-//		whatsapp.SendMessage(userPhone, "Payment failed. Please try again.")
-//		return
-//	}
-//
-//	//@TODO //change to webhooks
-//	time.Sleep(5 * time.Second)
-//	status, _ := h.momoService.CheckTransactionStatus(refId)
-//
-//	switch status {
-//	case "SUCCESSFUL":
-//		whatsapp.SendMessage(userPhone, "✅ Payment successful!")
-//	case "PENDING":
-//		whatsapp.SendMessage(userPhone, "⌛ Payment pending. Please approve it on your phone.")
-//	default:
-//		whatsapp.SendMessage(userPhone, "❌ Payment failed or was cancelled.")
-//	}
-//}
+// would use consumers for this process
+func (h *Handler) processMessage(userMessage, userPhone, userName string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	fmt.Printf("Processing message from %s: %s\n", userPhone, userMessage)
+
+	user, err := h.repo.GetUserByPhone(ctx, userPhone)
+	if err != nil {
+		fmt.Printf("Error fetching user: %v\n", err)
+		return
+	}
+
+	if user == nil {
+		newUser := &model.Details{
+			Username:  userName,
+			Phone:     userPhone,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+
+		if err := h.repo.CreateUser(ctx, newUser); err != nil {
+			fmt.Printf("Failed to create user: %v\n", err)
+			return
+		}
+
+		fmt.Printf("New user created: %s\n", userPhone)
+		whatsapp.SendTemplateMessage(userPhone, string(whatsapp.EasyPayIntro))
+		return
+	}
+
+	result, err := ai.ExtractMessageDetails(ctx, userMessage)
+	if err != nil {
+		fmt.Printf("AI extraction error: %v\n", err)
+		whatsapp.SendMessage(userPhone, "Sorry, I didn’t understand that. Please send the amount and account again.")
+		return
+	}
+
+	if result.Amount <= 0 {
+		whatsapp.SendMessage(userPhone, "Amount must be more than 0")
+		return
+	}
+
+	whatsapp.SendMessage(userPhone, fmt.Sprintf("⌛Processing your payment of %.2f GHS...", result.Amount))
+
+	refId, err := h.momoService.RequestPay(
+		strconv.FormatFloat(result.Amount, 'f', -1, 64),
+		userPhone,
+		result.Message,
+	)
+	if err != nil {
+		fmt.Printf("MTN MoMo error: %v\n", err)
+		whatsapp.SendMessage(userPhone, "Payment failed. Please try again.")
+		return
+	}
+
+	//@TODO //change to webhooks
+	time.Sleep(5 * time.Second)
+	status, err := h.momoService.CheckTransactionStatus(refId)
+	if err != nil {
+		fmt.Printf("Error checking transaction status: %v\n", err)
+		whatsapp.SendMessage(userPhone, "⚠️ Unable to check payment status at the moment. Please try again later.")
+		return
+	}
+
+	switch status {
+	case "SUCCESSFUL":
+		whatsapp.SendMessage(userPhone, "✅ Payment successful!")
+	case "PENDING":
+		whatsapp.SendMessage(userPhone, "⌛ Payment pending. Please approve it on your phone.")
+	default:
+		whatsapp.SendMessage(userPhone, "❌ Payment failed or was cancelled.")
+	}
+}
 
 // HealthCheck endpoint
 func (h *Handler) HealthCheck(c *gin.Context) {
